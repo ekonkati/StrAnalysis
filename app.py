@@ -4,7 +4,6 @@ import numpy as np
 import plotly.graph_objects as go
 
 # --- Import modular functions and utilities ---
-# Ensure these files are in the same directory: structure_model.py, fea_utils.py
 from fea_utils import generate_and_analyze_structure, parse_grid_input, parse_and_apply_wall_loads
 from structure_model import calculate_rc_properties 
 
@@ -23,10 +22,10 @@ def get_hover_text(elem):
     text += f"Total UDL qz: {elem['results'].get('q_udl_z', 0.0):.2f} kN/m"
     return text
 
-# --- 2. 3D Plotting Function (NEW) ---
+# --- 2. 3D Plotting Function ---
 
-def plot_3d_frame(nodes, elements, display_mode='Structure'):
-    """Plots the 3D frame structure and optionally colors elements by Max Abs Moment."""
+def plot_3d_frame(nodes, elements, display_mode='Structure', show_member_ids=False, show_nodes=False, show_loads=False):
+    """Plots the 3D frame structure with toggles for visualization data."""
     fig = go.Figure()
     
     # 1. Define max values for scaling colors
@@ -34,7 +33,6 @@ def plot_3d_frame(nodes, elements, display_mode='Structure'):
     
     # 2. Iterate through elements to draw lines
     for elem in elements:
-        # Find the node objects based on ID (slower, but necessary for visualization data)
         n1 = next(n for n in nodes if n['id'] == elem['start_node_id'])
         n2 = next(n for n in nodes if n['id'] == elem['end_node_id'])
         
@@ -47,10 +45,8 @@ def plot_3d_frame(nodes, elements, display_mode='Structure'):
         
         if display_mode == 'Max Bending Moment':
             moment = elem['results'].get('Max_Abs_Moment', 0)
-            # Use Plotly's color mapping for Viridis scale (0=Blue, Max=Yellow)
-            # The Viridis scale is often used for technical data
+            # Use HSL for a visible color gradient (Blue=low, Yellow=high)
             normalized_value = moment / max_abs_moment
-            # Scale from 0 to 1 for the color gradient
             line_color = f'hsl({255 * (1 - normalized_value)}, 100%, 50%)' 
 
         fig.add_trace(go.Scatter3d(
@@ -62,14 +58,44 @@ def plot_3d_frame(nodes, elements, display_mode='Structure'):
             name=f"Element {elem['id']}",
             showlegend=False
         ))
+        
+        # Member ID Label (3D Annotation)
+        if show_member_ids:
+            mid_x, mid_y, mid_z = (n1['x'] + n2['x']) / 2, (n1['y'] + n2['y']) / 2, (n1['z'] + n2['z']) / 2
+            
+            # Use a dummy trace for a text label
+            fig.add_trace(go.Scatter3d(
+                x=[mid_x], y=[mid_y], z=[mid_z],
+                mode='text',
+                text=[f"E{elem['id']}"],
+                textfont=dict(color='black', size=12),
+                showlegend=False
+            ))
+            
+        # Load Indicator
+        if show_loads and elem['results'].get('q_udl_z', 0.0) > 0.0:
+             is_horizontal = np.isclose(n1['z'], n2['z'])
+             if is_horizontal: # Only draw loads for horizontal beams 
+                mid_x, mid_y, mid_z = (n1['x'] + n2['x']) / 2, (n1['y'] + n2['y']) / 2, n1['z']
+                # Place load text slightly below the member
+                fig.add_trace(go.Scatter3d(
+                    x=[mid_x], y=[mid_y], z=[mid_z - 0.1], 
+                    mode='text',
+                    text=[f"q={elem['results']['q_udl_z']:.1f}kN/m"],
+                    textfont=dict(color='red', size=10),
+                    showlegend=False
+                ))
 
     # 3. Add node markers
+    node_texts = [f"Node {n['id']}" for n in nodes] if show_nodes else None
+    node_hover = [f"Node {n['id']}<br>({n['x']:.2f}, {n['y']:.2f}, {n['z']:.2f})m" for n in nodes]
     fig.add_trace(go.Scatter3d(
         x=[n['x'] for n in nodes], y=[n['y'] for n in nodes], z=[n['z'] for n in nodes],
-        mode='markers',
+        mode='markers' if not show_nodes else 'markers+text',
+        text=node_texts,
         marker=dict(size=5, color='purple', opacity=0.8),
         hoverinfo='text',
-        hovertext=[f"Node {n['id']}<br>({n['x']:.2f}, {n['y']:.2f}, {n['z']:.2f})m" for n in nodes],
+        hovertext=node_hover,
         name='Nodes',
         showlegend=False
     ))
@@ -79,21 +105,15 @@ def plot_3d_frame(nodes, elements, display_mode='Structure'):
         title=f"3D Frame View ({display_mode})",
         scene=dict(
             xaxis_title='X (m)', yaxis_title='Y (m)', zaxis_title='Z (m)',
-            aspectmode='data', # Ensures true scale
+            aspectmode='data',
         ),
         height=700
     )
     return fig
 
+# --- 3. 2D Plotting Function ---
 
-# --- 3. 2D Plotting Function (Unchanged, for context) ---
-
-def plot_2d_frame(nodes, elements, plane_axis, coordinate, display_mode, show_values):
-    # ... (This function is long and unchanged, omitting here for brevity)
-    # ... (It must be included in the final app.py file)
-    # Re-insert the full 'plot_2d_frame' implementation from the previous step here.
-    # [START OF plot_2d_frame code - not shown here]
-    
+def plot_2d_frame(nodes, elements, plane_axis, coordinate, display_mode, show_values, scale_factor, show_member_ids=False, show_nodes=False, show_loads=False):
     fig = go.Figure()
     
     # Filter nodes for the selected plane
@@ -129,7 +149,7 @@ def plot_2d_frame(nodes, elements, plane_axis, coordinate, display_mode, show_va
             max_abs_result = max(max_abs_result, abs(res.get(f'{result_key_base}_Start', 0.0)))
             max_abs_result = max(max_abs_result, abs(res.get(f'{result_key_base}_End', 0.0)))
             
-            # CHECK MID-SPAN MOMENT FOR PARABOLIC DIAGRAM (FIX)
+            # BENDING MOMENT PARABOLIC CHECK (REQUEST 4)
             if display_mode == 'Bending Moment' and elem['length'] > 0:
                 w_eff = res.get('q_udl_z', 0.0)
                 if w_eff > 1e-3: 
@@ -150,6 +170,9 @@ def plot_2d_frame(nodes, elements, plane_axis, coordinate, display_mode, show_va
         max_abs_defl = max(max_abs_defl, max(abs(e['results'].get('Disp_Global_End', np.zeros(6))[2]) for e in relevant_elements)) or 1e-6
         global_scale = max_dim / (max_abs_defl * 10) 
 
+    # APPLY USER SCALE FACTOR (REQUEST 5)
+    global_scale *= scale_factor 
+
     # --- Plotting Elements and Diagrams ---
     for elem in relevant_elements:
         start_pos, end_pos = elem['start_node_pos'], elem['end_node_pos']
@@ -166,6 +189,33 @@ def plot_2d_frame(nodes, elements, plane_axis, coordinate, display_mode, show_va
         fig.add_trace(go.Scatter(x=x_coords_frame, y=z_coords_frame, mode='lines', line=dict(color='darkblue', width=3), 
                                  hoverinfo='text', hovertext=get_hover_text(elem), showlegend=False))
         
+        # Member ID Label (REQUEST 3)
+        if show_member_ids and L > 0:
+            mid_x_plot = (start_x_plot + end_x_plot) / 2
+            mid_z = (start_z + end_z) / 2
+            fig.add_annotation(
+                x=mid_x_plot, y=mid_z,
+                text=f"E{elem['id']}", showarrow=False,
+                font=dict(color='black', size=10, weight='bold'),
+                bgcolor="rgba(255, 255, 255, 0.5)", borderpad=2
+            )
+
+        # Load Indicator (REQUEST 3)
+        if show_loads and elem['results'].get('q_udl_z', 0.0) > 0.0 and L > 0:
+            num_arrows = 3
+            for i in range(1, num_arrows + 1):
+                x_ratio = i / (num_arrows + 1)
+                x_arrow = x_coords_frame[0] * (1 - x_ratio) + x_coords_frame[1] * x_ratio
+                z_arrow = z_coords_frame[0] * (1 - x_ratio) + z_coords_frame[1] * x_ratio
+                
+                # Simple downward arrow (annotation with arrowhead)
+                fig.add_annotation(
+                    x=x_arrow, y=z_arrow,
+                    ax=x_arrow, ay=z_arrow + max_dim * 0.05, 
+                    xref="x", yref="y", axref="x", ayref="y",
+                    text="", showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1, arrowcolor="red"
+                )
+                
         # RESULT DIAGRAMS
         if display_mode != 'Structure':
             num_points = 51 if display_mode in ['Bending Moment', 'Shear Force'] else 21
@@ -236,12 +286,16 @@ def plot_2d_frame(nodes, elements, plane_axis, coordinate, display_mode, show_va
                     )
                     
 
-    # Node Markers and Layout
+    # Node Markers and Layout (REQUEST 3)
+    node_texts = [f"Node {n['id']}" for n in plane_nodes_list] if show_nodes else None
+    node_hover = [f"Node {n['id']}" for n in plane_nodes_list]
     fig.add_trace(go.Scatter(x=[n[x_key] for n in plane_nodes_list], y=[n[z_key] for n in plane_nodes_list], 
-                             mode='markers', marker=dict(size=8, color='purple'), name='Nodes', 
-                             text=[f"Node {n['id']}" for n in plane_nodes_list], hoverinfo='text', showlegend=False))
+                             mode='markers' if not show_nodes else 'markers+text', 
+                             text=node_texts,
+                             marker=dict(size=8, color='purple'), name='Nodes', 
+                             hoverinfo='text', hovertext=node_hover, showlegend=False))
 
-    title_scale = f" (Scale: 1:{int(max_dim/(max_abs_result/8.0)):,})" if display_mode in ['Bending Moment', 'Shear Force', 'Axial Force'] else ""
+    title_scale = f" (Scale: x{scale_factor:.1f})"
     title_scale_def = f" (Exaggerated Scale)" if display_mode == 'Deflection' else ""
     
     fig.update_layout(title=f"2D Elevation: **{display_mode}** ({unit}) on {plane_axis.replace('Y', 'X-Z').replace('X', 'Y-Z')} Plane at {plane_axis}={coordinate}m{title_scale}{title_scale_def}", 
@@ -249,7 +303,6 @@ def plot_2d_frame(nodes, elements, plane_axis, coordinate, display_mode, show_va
     fig.update_yaxes(scaleanchor="x", scaleratio=1)
     return fig
 
-# [END OF plot_2d_frame code]
 
 # --- 4. Main Streamlit App UI ---
 st.title("🏗️ 2D/3D Frame Analyzer")
@@ -288,7 +341,6 @@ if analyze_button:
     if not all([x_dims, y_dims, z_dims]): 
         st.error("Invalid grid input.")
     else:
-        # Properties calculation needs to be here as it uses sidebar inputs
         col_p = calculate_rc_properties(col_b, col_h, E)
         beam_p = calculate_rc_properties(beam_b, beam_h, E)
         q_total_gravity_psf = slab_d*slab_t + fin_l + live_l
@@ -309,26 +361,38 @@ if analyze_button:
 if 'analysis_results' in st.session_state and st.session_state['analysis_results']['success']:
     results, nodes, elements = st.session_state['analysis_results'], st.session_state['analysis_results']['nodes'], st.session_state['analysis_results']['elements']
     
-    # NEW TAB ORDER
-    tab1, tab2, tab3, tab4 = st.tabs(["3D View", "2D Elevation View", "Support Reactions", "Detailed Element Results"])
+    # Combined Tab Structure (REQUEST 2)
+    tab1, tab2, tab3 = st.tabs(["Visualization & Diagrams", "Support Reactions", "Detailed Element Results"])
     
-    # 3D View Tab
+    # 3D/2D Visualization Tab
     with tab1:
-        st.subheader("3D Structure Visualization")
-        col_3d_1, col_3d_2 = st.columns([0.5, 0.5])
-        display_mode_3d = col_3d_1.selectbox("Color Code By:", ('Structure', 'Max Bending Moment'), key='display_mode_3d')
-        st.plotly_chart(plot_3d_frame(nodes, elements, display_mode_3d), use_container_width=True)
+        st.subheader("Visualization Controls")
+        
+        # Global Plot Controls (REQUESTS 1, 5)
+        col_ctrl1, col_ctrl2, col_ctrl3, col_ctrl4, col_ctrl5 = st.columns([1, 1, 1, 1, 1.5])
+        
+        show_nodes = col_ctrl1.checkbox("Show Node IDs", value=False)
+        show_member_ids = col_ctrl2.checkbox("Show Member IDs", value=True)
+        show_loads = col_ctrl3.checkbox("Show Loads", value=True)
+        scale_factor = col_ctrl4.number_input("Diagram Scale Factor", min_value=0.1, max_value=10.0, value=1.0, step=0.1, help="Scales the magnitude of all diagrams in 2D plots (Request 5)")
 
-    # 2D Elevation View Tab
-    with tab2:
-        st.subheader("2D Elevation View and Result Diagrams")
+        st.divider()
+
+        # --- 3D VIEW ---
+        st.subheader("3D Structure View")
+        display_mode_3d = col_ctrl5.selectbox("Color Code By:", ('Structure', 'Max Bending Moment'), key='display_mode_3d')
+        st.plotly_chart(plot_3d_frame(nodes, elements, display_mode_3d, show_member_ids, show_nodes, show_loads), use_container_width=True)
         
-        col_2d_1, col_2d_2, col_2d_3 = st.columns([0.3, 0.4, 0.3])
+        st.divider()
+
+        # --- 2D VIEW ---
+        st.subheader("2D Elevation Diagrams")
         
+        col_2d_1, col_2d_2 = st.columns([0.5, 0.5])
         plane_axis_display = col_2d_1.radio("Grid Plane", ('X-Z (Y-Gridline)', 'Y-Z (X-Gridline)'), key='plane_axis_radio_1')
         diagram_options = ['Bending Moment', 'Shear Force', 'Deflection', 'Axial Force', 'Structure']
         display_mode_2d = col_2d_2.selectbox("Result Diagram", diagram_options, key='display_mode_2d_1')
-        show_values = col_2d_3.checkbox("Show Values", key='show_values_1', value=True)
+        show_values = col_2d_2.checkbox("Show Diagram Values", key='show_values_1', value=True)
         
         if plane_axis_display == 'X-Z (Y-Gridline)':
             y_coords = sorted(list(set(n['y'] for n in nodes)))
@@ -341,10 +405,10 @@ if 'analysis_results' in st.session_state and st.session_state['analysis_results
         
         st.info(f"Displaying **{display_mode_2d}** on the **{plane_key}-Gridline** at coordinate **{coordinate:.3f} m**.")
         
-        st.plotly_chart(plot_2d_frame(nodes, elements, plane_key, coordinate, display_mode_2d, show_values), use_container_width=True)
+        st.plotly_chart(plot_2d_frame(nodes, elements, plane_key, coordinate, display_mode_2d, show_values, scale_factor, show_member_ids, show_nodes, show_loads), use_container_width=True)
 
     # Support Reactions Tab
-    with tab3:
+    with tab2:
         st.subheader("Support Reactions (Global X, Y, Z)")
         support_nodes = {n['id']: n for n in nodes if any(n['restraints'])}
         if support_nodes:
@@ -356,7 +420,7 @@ if 'analysis_results' in st.session_state and st.session_state['analysis_results
         else: st.write("No support nodes found.")
         
     # Detailed Element Results Tab
-    with tab4:
+    with tab3:
         st.subheader("All Element End Forces & Moments (Local Coordinates)")
         data = []
         for e in elements:
